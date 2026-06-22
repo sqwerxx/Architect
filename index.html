@@ -510,7 +510,7 @@
       activeBot: null,          
       linkingTargetScenarioId: null,
       linkingTargetButtonIndex: null,
-      linkingType: 'inline', // 'inline' или 'keyboard'
+      linkingType: 'inline', // 'inline' or 'keyboard'
       emulatorMessages: [],
       currentEmulatorReplyKeyboard: []
     };
@@ -1323,8 +1323,20 @@
         return str.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
       };
 
+      const translite = (str) => {
+        const ru = {
+          'а':'a', 'б':'b', 'в':'v', 'г':'g', 'д':'d', 'е':'e', 'ё':'e', 'ж':'zh', 'з':'z', 'и':'i', 'й':'y', 'к':'k', 'л':'l', 'м':'m', 'н':'n', 'о':'o', 'п':'p', 'р':'r', 'с':'s', 'т':'t', 'у':'u', 'ф':'f', 'х':'kh', 'ц':'ts', 'ч':'ch', 'ш':'sh', 'щ':'shch', 'ы':'y', 'э':'e', 'ю':'yu', 'я':'ya',
+          'А':'A', 'Б':'B', 'В':'V', 'Г':'G', 'Д':'D', 'Е':'E', 'Ё':'E', 'Ж':'Zh', 'З':'Z', 'И':'I', 'Й':'Y', 'К':'K', 'Л':'L', 'М':'M', 'Н':'N', 'О':'O', 'П':'P', 'Р':'R', 'С':'S', 'Т':'T', 'У':'U', 'Ф':'F', 'Х':'Kh', 'Ц':'Ts', 'Ч':'Ch', 'Ш':'Sh', 'Щ':'Shch', 'Ы':'Y', 'Э':'E', 'Ю':'Yu', 'Я':'Ya'
+        };
+        return str.split('').map(c => ru[c] || c).join('');
+      };
+
       const safeId = (str) => {
-        return str.replace(/[^a-zA-Z0-9_]/g, '_');
+        let clean = translite(str).replace(/[^a-zA-Z0-9_]/g, '_');
+        if (/^[0-9]/.test(clean)) {
+          clean = 'n_' + clean;
+        }
+        return clean.toLowerCase();
       };
 
       const cleanCmd = (cmd) => {
@@ -1350,6 +1362,7 @@ import asyncio
 import logging
 import sys
 from aiogram import Bot, Dispatcher, types, F
+from aiogram import html
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.context import FSMContext
@@ -1400,6 +1413,17 @@ class BotStates(StatesGroup):
           pyCode += `async def run_hidden_${handlerName}(message: types.Message, state: FSMContext):\n`;
           pyCode += `    """Внутренний хендлер для скрытого шага /${c}"""\n`;
           pyCode += `    await state.set_state(${stateVar})\n`;
+        }
+
+        // Страховочный рендеринг алертов/уведомлений, если сценарий с ними был вызван обычной командой / текстовым сообщением
+        if (scen.hasAlert) {
+          pyCode += `    # [СИМУЛЯЦИЯ АЛЕРТА]: Так как этот шаг запущен текстовым сообщением,\n`;
+          pyCode += `    # Telegram не может показать нативное модальное окно. Симулируем его текстом.\n`;
+          pyCode += `    await message.answer(text="⚠️ <b>[АЛЕРТ]: ${escapePyStr(scen.alertText)}</b>", parse_mode="HTML")\n`;
+        }
+        if (scen.hasInlineNotif) {
+          pyCode += `    # [СИМУЛЯЦИЯ ТОСТА]\n`;
+          pyCode += `    await message.answer(text="🔔 <i>${escapePyStr(scen.inlineNotifText)}</i>", parse_mode="HTML")\n`;
         }
 
         const hasKb = scen.hasKeyboard && scen.keyboardButtons && scen.keyboardButtons.length > 0;
@@ -1497,16 +1521,20 @@ class BotStates(StatesGroup):
             pyCode += `@dp.callback_query(F.data == "${callbackData}", ${stateVar})\n`;
             pyCode += `async def ${cbHandlerName}(callback: types.CallbackQuery, state: FSMContext):\n`;
 
+            let hasTransition = ibtn.linkedScenarios && ibtn.linkedScenarios.length > 0;
+
             if (ibtn.actionType === 'alert') {
               pyCode += `    # Показ всплывающего алерта в Telegram\n`;
               pyCode += `    await callback.answer(text="${escapePyStr(ibtn.actionValue)}", show_alert=True)\n`;
             } else {
               pyCode += `    # Отправка текстового сообщения в ответ на клик\n`;
               pyCode += `    await callback.message.answer(text="${escapePyStr(ibtn.actionValue)}")\n`;
-              pyCode += `    await callback.answer()  # Убираем часики загрузки у кнопки\n`;
+              if (!hasTransition) {
+                pyCode += `    await callback.answer()  # Убираем часики загрузки у кнопки\n`;
+              }
             }
 
-            if (ibtn.linkedScenarios && ibtn.linkedScenarios.length > 0) {
+            if (hasTransition) {
               const targetCmd = cleanCmd(ibtn.linkedScenarios[0]);
               const targetIdx = appState.activeBot.scenarios.findIndex(s => cleanCmd(s.command).toLowerCase() === targetCmd.toLowerCase());
               if (targetIdx !== -1) {
@@ -1518,6 +1546,8 @@ class BotStates(StatesGroup):
                   pyCode += `    await callback.answer(text="${escapePyStr(targetScen.alertText)}", show_alert=True)\n`;
                 } else if (targetScen.hasInlineNotif) {
                   pyCode += `    await callback.answer(text="${escapePyStr(targetScen.inlineNotifText)}", show_alert=False)\n`;
+                } else {
+                  pyCode += `    await callback.answer()\n`;
                 }
 
                 if (targetScen.isUnique) {
@@ -1526,6 +1556,7 @@ class BotStates(StatesGroup):
                   pyCode += `    await ${targetHandler}(callback.message, state)\n\n`;
                 }
               } else {
+                pyCode += `    await callback.answer()\n`;
                 pyCode += `    await callback.message.answer(text="Ошибка перехода: сценарий /${targetCmd} не найден.")\n\n`;
               }
             }
