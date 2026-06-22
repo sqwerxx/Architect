@@ -1402,9 +1402,38 @@ class BotStates(StatesGroup):
           pyCode += `    await state.set_state(${stateVar})\n`;
         }
 
-        // Reply keyboard
-        if (scen.hasKeyboard && scen.keyboardButtons && scen.keyboardButtons.length > 0) {
-          pyCode += `    # Сборка экранной клавиатуры (Reply Keyboard)\n`;
+        const hasKb = scen.hasKeyboard && scen.keyboardButtons && scen.keyboardButtons.length > 0;
+        const hasIn = scen.hasButtons && scen.inlineButtons && scen.inlineButtons.length > 0;
+
+        // ПАТТЕРН 1: Активны оба типа меню (Reply + Inline)
+        if (hasKb && hasIn) {
+          pyCode += `    # Так как Telegram API позволяет прикрепить только один reply_markup к сообщению,\n`;
+          pyCode += `    # мы отправляем Reply-кнопки (меню над вводом текста) и Inline-клавиатуру (под сообщением) двумя связанными вызовами.\n`;
+          pyCode += `    \n`;
+          pyCode += `    # 1. Сборка Reply-меню кнопок над клавиатурой ввода\n`;
+          pyCode += `    kb_builder = ReplyKeyboardBuilder()\n`;
+          scen.keyboardButtons.forEach(btn => {
+            pyCode += `    kb_builder.button(text="${escapePyStr(btn.text)}")\n`;
+          });
+          pyCode += `    kb_builder.adjust(2)\n`;
+          pyCode += `    reply_markup = kb_builder.as_markup(resize_keyboard=True, one_time_keyboard=True)\n`;
+          pyCode += `    \n`;
+          pyCode += `    # 2. Сборка Inline-кнопок под самим сообщением\n`;
+          pyCode += `    inline_builder = InlineKeyboardBuilder()\n`;
+          scen.inlineButtons.forEach((ibtn, bIdx) => {
+            pyCode += `    inline_builder.button(text="${escapePyStr(ibtn.text)}", callback_data="cb_${safeId(c)}_${idx}_${bIdx}")\n`;
+          });
+          pyCode += `    inline_builder.adjust(2)\n`;
+          pyCode += `    inline_markup = inline_builder.as_markup()\n`;
+          pyCode += `    \n`;
+          pyCode += `    # Активируем нижнее меню над клавиатурой\n`;
+          pyCode += `    await message.answer(text="Загрузка экранного меню...", reply_markup=reply_markup)\n`;
+          pyCode += `    # Отправляем сообщение с кнопками под ним\n`;
+          pyCode += `    await message.answer(text="${escapedText}", reply_markup=inline_markup)\n\n`;
+        }
+        // ПАТТЕРН 2: Активно только экранное Reply-меню кнопок
+        else if (hasKb) {
+          pyCode += `    # Сборка экранной клавиатуры (Reply Keyboard - кнопки над вводом текста)\n`;
           pyCode += `    kb_builder = ReplyKeyboardBuilder()\n`;
           scen.keyboardButtons.forEach(btn => {
             pyCode += `    kb_builder.button(text="${escapePyStr(btn.text)}")\n`;
@@ -1413,9 +1442,9 @@ class BotStates(StatesGroup):
           pyCode += `    markup = kb_builder.as_markup(resize_keyboard=True, one_time_keyboard=True)\n`;
           pyCode += `    await message.answer(text="${escapedText}", reply_markup=markup)\n\n`;
         } 
-        // Inline keyboard
-        else if (scen.hasButtons && scen.inlineButtons && scen.inlineButtons.length > 0) {
-          pyCode += `    # Сборка встроенных кнопок (Inline Keyboard)\n`;
+        // ПАТТЕРН 3: Активны только Inline-кнопки под сообщением
+        else if (hasIn) {
+          pyCode += `    # Сборка встроенных кнопок (Inline Keyboard - возле сообщения)\n`;
           pyCode += `    inline_builder = InlineKeyboardBuilder()\n`;
           scen.inlineButtons.forEach((ibtn, bIdx) => {
             pyCode += `    inline_builder.button(text="${escapePyStr(ibtn.text)}", callback_data="cb_${safeId(c)}_${idx}_${bIdx}")\n`;
@@ -1423,12 +1452,14 @@ class BotStates(StatesGroup):
           pyCode += `    inline_builder.adjust(2)  # Кнопки по 2 в ряд\n`;
           pyCode += `    markup = inline_builder.as_markup()\n`;
           pyCode += `    await message.answer(text="${escapedText}", reply_markup=markup)\n\n`;
-        } else {
+        } 
+        // ПАТТЕРН 4: Обычное текстовое сообщение
+        else {
           pyCode += `    await message.answer(text="${escapedText}")\n\n`;
         }
 
         // Reply buttons handlers
-        if (scen.hasKeyboard && scen.keyboardButtons && scen.keyboardButtons.length > 0) {
+        if (hasKb) {
           scen.keyboardButtons.forEach((btn, bIdx) => {
             const btnHandlerName = `reply_click_${safeId(c)}_${idx}_b${bIdx}`;
             pyCode += `# Обработка клика по кнопке "${btn.text}" на шаге /${c}\n`;
@@ -1458,7 +1489,7 @@ class BotStates(StatesGroup):
         }
 
         // Inline buttons handlers
-        if (scen.hasButtons && scen.inlineButtons && scen.inlineButtons.length > 0) {
+        if (hasIn) {
           scen.inlineButtons.forEach((ibtn, bIdx) => {
             const callbackData = `cb_${safeId(c)}_${idx}_${bIdx}`;
             const cbHandlerName = `inline_click_${safeId(c)}_${idx}_b${bIdx}`;
